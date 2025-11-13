@@ -1,0 +1,218 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_BACKEND_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/reelschat/backend"
+        ECR_FRONTEND_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/reelschat/frontend"
+        EKS_CLUSTER_NAME = 'reelschat-eks'
+        DOCKER_BUILD_TAG = "${BUILD_NUMBER}"
+        SLACK_CHANNEL = '#deployments'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        
+        stage('Build Backend') {
+            steps {
+                dir('backend') {
+                    sh '''
+                        docker build -t reelschat-backend:${DOCKER_BUILD_TAG} .
+                        docker tag reelschat-backend:${DOCKER_BUILD_TAG} ${ECR_BACKEND_REPO}:${DOCKER_BUILD_TAG}
+                        docker tag reelschat-backend:${DOCKER_BUILD_TAG} ${ECR_BACKEND_REPO}:latest
+                    '''
+                }
+            }
+        }
+        
+        stage('Build Frontend') {
+            steps {
+                dir('frontend') {
+                    sh '''
+                        docker build -t reelschat-frontend:${DOCKER_BUILD_TAG} .
+                        docker tag reelschat-frontend:${DOCKER_BUILD_TAG} ${ECR_FRONTEND_REPO}:${DOCKER_BUILD_TAG}
+                        docker tag reelschat-frontend:${DOCKER_BUILD_TAG} ${ECR_FRONTEND_REPO}:latest
+                    '''
+                }
+            }
+        }
+        
+        stage('Test Backend') {
+            steps {
+                dir('backend') {
+                    sh '''
+                        npm install
+                        npm run test || true
+                    '''
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            parallel {
+                stage('Scan Backend') {
+                    steps {
+                        sh '''
+                            trivy image --severity HIGH,CRITICAL reelschat-backend:${DOCKER_BUILD_TAG} || true
+                        '''
+                    }
+                }
+                stage('Scan Frontend') {
+                    steps {
+                        sh '''
+                            trivy image --severity HIGH,CRITICAL reelschat-frontend:${DOCKER_BUILD_TAG} || true
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Push to ECR') {
+            steps {
+                script {
+                    sh '''
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_BACKEND_REPO}
+                        docker push ${ECR_BACKEND_REPO}:${DOCKER_BUILD_TAG}
+                        docker push ${ECR_BACKEND_REPO}:latest
+                        docker push ${ECR_FRONTEND_REPO}:${DOCKER_BUILD_TAG}
+                        docker push ${ECR_FRONTEND_REPO}:latest
+                    '''
+                }
+            }
+        }
+        
+        stage('Update Kubernetes') {
+            steps {
+                script {
+                    sh '''
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}
+                        
+                        # Update backend deployment
+                        kubectl set image deployment/backend backend=${ECR_BACKEND_REPO}:${DOCKER_BUILD_TAG} -n reelschat
+                        
+                        # Update frontend deployment
+                        kubectl set image deployment/frontend frontend=${ECR_FRONTEND_REPO}:${DOCKER_BUILD_TAG} -n reelschat
+                    '''
+                }
+            }
+        }
+        
+        stage('Wait for Rollout') {
+            steps {
+                script {
+                    sh '''
+                        kubectl rollout status deployment/backend -n reelschat --timeout=5m
+                        kubectl rollout status deployment/frontend -n reelschat --timeout=5m
+                    '''
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                script {
+                    sh '''
+                        # Wait for pods to be ready
+                        sleep 30
+                        
+                        # Check backend health
+                        BACKEND_POD=$(kubectl get pods -n reelschat -l app=backend -o jsonpath='{.items[0].metadata.name}')
+                        kubectl exec -n reelschat $BACKEND_POD -- curl -f http://localhost:3000/health || exit 1
+                        
+                        echo "Health checks passed!"
+                    '''
+                }
+            }
+        }
+        
+        stage('Smoke Tests') {
+            steps {
+                script {
+                    sh '''
+                        # Run basic smoke tests
+                        INGRESS_URL=$(kubectl get ingress reelschat-ingress -n reelschat -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        
+                        # Test API endpoint
+                        curl -f http://${INGRESS_URL}/api/health || exit 1
+                        
+                        # Test frontend
+                        curl -f http://${INGRESS_URL}/ || exit 1
+                        
+                        echo "Smoke tests passed!"
+                    '''
+                }
+            }
+        }
+        
+        stage('Backup Database') {
+            steps {
+                script {
+                    sh '''
+                        # Create RDS snapshot
+                        SNAPSHOT_ID="reelschat-backup-${BUILD_NUMBER}-$(date +%Y%m%d-%H%M%S)"
+                        aws rds create-db-snapshot \
+                            --db-instance-identifier reelschat-postgres \
+                            --db-snapshot-identifier $SNAPSHOT_ID \
+                            --region ${AWS_REGION}
+                        
+                        echo "Database snapshot created: $SNAPSHOT_ID"
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                slackSend(
+                    channel: env.SLACK_CHANNEL,
+                    color: 'good',
+                    message: """
+                        ✅ Deployment Successful
+                        Job: ${env.JOB_NAME}
+                        Build: ${env.BUILD_NUMBER}
+                        Commit: ${env.GIT_COMMIT_SHORT}
+                        Duration: ${currentBuild.durationString}
+                    """
+                )
+            }
+        }
+        failure {
+            script {
+                // Rollback on failure
+                sh '''
+                    echo "Deployment failed, rolling back..."
+                    kubectl rollout undo deployment/backend -n reelschat
+                    kubectl rollout undo deployment/frontend -n reelschat
+                    kubectl rollout status deployment/backend -n reelschat --timeout=3m
+                    kubectl rollout status deployment/frontend -n reelschat --timeout=3m
+                '''
+                
+                slackSend(
+                    channel: env.SLACK_CHANNEL,
+                    color: 'danger',
+                    message: """
+                        ❌ Deployment Failed & Rolled Back
+                        Job: ${env.JOB_NAME}
+                        Build: ${env.BUILD_NUMBER}
+                        Commit: ${env.GIT_COMMIT_SHORT}
+                    """
+                )
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

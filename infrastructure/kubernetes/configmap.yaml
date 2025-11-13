@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reelschat-config
+  namespace: reelschat
+data:
+  DB_HOST: postgres-service
+  DB_PORT: "5432"
+  DB_NAME: reelschat
+  REDIS_URL: redis://redis-service:6379
+  NODE_ENV: production

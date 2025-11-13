@@ -1,0 +1,204 @@
+.PHONY: help dev-start dev-stop dev-logs prod-build prod-deploy prod-rollback db-migrate db-seed db-backup k8s-deploy k8s-scale k8s-status tf-init tf-plan tf-apply jenkins-start
+
+# Variables
+PROJECT_NAME = reelschat
+AWS_REGION = us-east-1
+AWS_ACCOUNT_ID = $(shell aws sts get-caller-identity --query Account --output text)
+ECR_BACKEND = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(PROJECT_NAME)/backend
+ECR_FRONTEND = $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(PROJECT_NAME)/frontend
+BUILD_TAG = $(shell git rev-parse --short HEAD)
+
+help: ## Show this help message
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Available targets:'
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# Development Commands
+dev-start: ## Start development environment
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml up -d
+	@echo "Development environment started!"
+	@echo "Backend: http://localhost:3000"
+	@echo "Frontend: http://localhost:5173"
+	@echo "PostgreSQL: localhost:5432"
+	@echo "Redis: localhost:6379"
+
+dev-stop: ## Stop development environment
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml down
+
+dev-logs: ## View development logs
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml logs -f
+
+dev-restart: dev-stop dev-start ## Restart development environment
+
+# Production Commands
+prod-build: ## Build production Docker images
+	docker build -t $(PROJECT_NAME)-backend:$(BUILD_TAG) ./backend
+	docker build -t $(PROJECT_NAME)-frontend:$(BUILD_TAG) ./frontend
+	docker tag $(PROJECT_NAME)-backend:$(BUILD_TAG) $(ECR_BACKEND):$(BUILD_TAG)
+	docker tag $(PROJECT_NAME)-backend:$(BUILD_TAG) $(ECR_BACKEND):latest
+	docker tag $(PROJECT_NAME)-frontend:$(BUILD_TAG) $(ECR_FRONTEND):$(BUILD_TAG)
+	docker tag $(PROJECT_NAME)-frontend:$(BUILD_TAG) $(ECR_FRONTEND):latest
+
+prod-push: ## Push Docker images to ECR
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(ECR_BACKEND)
+	docker push $(ECR_BACKEND):$(BUILD_TAG)
+	docker push $(ECR_BACKEND):latest
+	docker push $(ECR_FRONTEND):$(BUILD_TAG)
+	docker push $(ECR_FRONTEND):latest
+
+prod-deploy: prod-build prod-push k8s-deploy ## Build, push and deploy to production
+
+prod-rollback: ## Rollback production deployment
+	kubectl rollout undo deployment/backend -n $(PROJECT_NAME)
+	kubectl rollout undo deployment/frontend -n $(PROJECT_NAME)
+	kubectl rollout status deployment/backend -n $(PROJECT_NAME)
+	kubectl rollout status deployment/frontend -n $(PROJECT_NAME)
+
+# Database Commands
+db-migrate: ## Run database migrations
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml exec postgres psql -U postgres -d $(PROJECT_NAME) -f /docker-entrypoint-initdb.d/1-schema.sql
+
+db-seed: ## Seed database with test data
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml exec postgres psql -U postgres -d $(PROJECT_NAME) -f /docker-entrypoint-initdb.d/2-seed.sql
+
+db-backup: ## Backup database
+	@mkdir -p backups
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml exec -T postgres pg_dump -U postgres $(PROJECT_NAME) > backups/$(PROJECT_NAME)_$(shell date +%Y%m%d_%H%M%S).sql
+	@echo "Backup created in backups/ directory"
+
+db-restore: ## Restore database from backup (usage: make db-restore FILE=backup.sql)
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml exec -T postgres psql -U postgres -d $(PROJECT_NAME) < $(FILE)
+
+db-shell: ## Open database shell
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml exec postgres psql -U postgres -d $(PROJECT_NAME)
+
+# Kubernetes Commands
+k8s-config: ## Configure kubectl for EKS
+	aws eks update-kubeconfig --region $(AWS_REGION) --name $(PROJECT_NAME)-eks
+
+k8s-deploy: k8s-config ## Deploy to Kubernetes
+	kubectl apply -f infrastructure/kubernetes/namespace.yaml
+	kubectl apply -f infrastructure/kubernetes/configmap.yaml
+	kubectl apply -f infrastructure/kubernetes/secrets.yaml
+	kubectl apply -f infrastructure/kubernetes/postgres-statefulset.yaml
+	kubectl apply -f infrastructure/kubernetes/redis-statefulset.yaml
+	kubectl apply -f infrastructure/kubernetes/backend-deployment.yaml
+	kubectl apply -f infrastructure/kubernetes/frontend-deployment.yaml
+	kubectl apply -f infrastructure/kubernetes/ingress.yaml
+	kubectl apply -f infrastructure/kubernetes/hpa.yaml
+	kubectl apply -f infrastructure/kubernetes/network-policy.yaml
+	@echo "Deployment completed!"
+
+k8s-scale: ## Scale deployments (usage: make k8s-scale APP=backend REPLICAS=5)
+	kubectl scale deployment/$(APP) --replicas=$(REPLICAS) -n $(PROJECT_NAME)
+
+k8s-status: k8s-config ## Check Kubernetes cluster status
+	@echo "=== Namespaces ==="
+	kubectl get namespaces
+	@echo "\n=== Pods ==="
+	kubectl get pods -n $(PROJECT_NAME)
+	@echo "\n=== Services ==="
+	kubectl get services -n $(PROJECT_NAME)
+	@echo "\n=== Deployments ==="
+	kubectl get deployments -n $(PROJECT_NAME)
+	@echo "\n=== HPA ==="
+	kubectl get hpa -n $(PROJECT_NAME)
+
+k8s-logs: ## View pod logs (usage: make k8s-logs POD=backend-xxx)
+	kubectl logs -f $(POD) -n $(PROJECT_NAME)
+
+k8s-shell: ## Open shell in pod (usage: make k8s-shell POD=backend-xxx)
+	kubectl exec -it $(POD) -n $(PROJECT_NAME) -- /bin/sh
+
+k8s-delete: ## Delete all Kubernetes resources
+	kubectl delete namespace $(PROJECT_NAME)
+
+# Terraform Commands
+tf-init: ## Initialize Terraform
+	cd infrastructure/terraform && terraform init
+
+tf-plan: ## Plan Terraform changes
+	cd infrastructure/terraform && terraform plan -out=tfplan
+
+tf-apply: ## Apply Terraform changes
+	cd infrastructure/terraform && terraform apply tfplan
+
+tf-destroy: ## Destroy Terraform infrastructure
+	cd infrastructure/terraform && terraform destroy
+
+tf-output: ## Show Terraform outputs
+	cd infrastructure/terraform && terraform output
+
+# Jenkins Commands
+jenkins-start: ## Start Jenkins server
+	docker-compose -f infrastructure/jenkins/docker-compose.yml up -d
+	@echo "Jenkins started at http://localhost:8080"
+	@echo "Initial admin password:"
+	@sleep 10
+	@docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+
+jenkins-stop: ## Stop Jenkins server
+	docker-compose -f infrastructure/jenkins/docker-compose.yml down
+
+jenkins-logs: ## View Jenkins logs
+	docker-compose -f infrastructure/jenkins/docker-compose.yml logs -f
+
+jenkins-backup: ## Backup Jenkins data
+	@mkdir -p backups/jenkins
+	docker run --rm --volumes-from jenkins -v $(PWD)/backups/jenkins:/backup alpine tar czf /backup/jenkins_$(shell date +%Y%m%d_%H%M%S).tar.gz /var/jenkins_home
+	@echo "Jenkins backup created in backups/jenkins/"
+
+# Testing Commands
+test-backend: ## Run backend tests
+	cd backend && npm test
+
+test-frontend: ## Run frontend tests
+	cd frontend && npm test
+
+test-all: test-backend test-frontend ## Run all tests
+
+# Code Quality Commands
+lint-backend: ## Lint backend code
+	cd backend && npm run lint
+
+lint-frontend: ## Lint frontend code
+	cd frontend && npm run lint
+
+format-backend: ## Format backend code
+	cd backend && npm run format
+
+format-frontend: ## Format frontend code
+	cd frontend && npm run format
+
+# Monitoring Commands
+logs-backend: ## View backend logs in production
+	kubectl logs -f -l app=backend -n $(PROJECT_NAME)
+
+logs-frontend: ## View frontend logs in production
+	kubectl logs -f -l app=frontend -n $(PROJECT_NAME)
+
+metrics: ## View cluster metrics
+	kubectl top nodes
+	kubectl top pods -n $(PROJECT_NAME)
+
+# Cleanup Commands
+clean: ## Clean local development environment
+	docker-compose -f infrastructure/docker/docker-compose.dev.yml down -v
+	rm -rf node_modules
+	rm -rf backend/node_modules
+	rm -rf frontend/node_modules
+	rm -rf backend/dist
+	rm -rf frontend/dist
+
+clean-docker: ## Remove all Docker images and containers
+	docker system prune -af --volumes
+
+# Setup Commands
+setup-backend: ## Install backend dependencies
+	cd backend && npm install
+
+setup-frontend: ## Install frontend dependencies
+	cd frontend && npm install
+
+setup-all: setup-backend setup-frontend
