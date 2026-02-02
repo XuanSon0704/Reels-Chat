@@ -1,49 +1,5 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
-[![React](https://img.shields.io/badge/React-18+-blue.svg)](https://reactjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5+-blue.svg)](https://www.typescriptlang.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
-[![Redis](https://img.shields.io/badge/Redis-7+-red.svg)](https://redis.io/)
-[![Docker](https://img.shields.io/badge/Docker-20+-blue.svg)](https://www.docker.com/)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28+-blue.svg)](https://kubernetes.io/)
 
-A modern, full-stack social media application with Instagram-style vertical reels and real-time messaging capabilities.
 
-## 📋 Table of Contents
-
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Development](#development)
-- [Deployment](#deployment)
-- [API Documentation](#api-documentation)
-- [Contributing](#contributing)
-- [License](#license)
-
-## ✨ Features
-
-### Core Features
-- 📱 **Vertical Reels Feed** - Instagram-style video feed with smooth scrolling
-- 💬 **Real-time Messaging** - WebSocket-powered instant messaging
-- 💖 **Likes & Comments** - Engage with content in real-time
-- 👥 **Follow System** - Connect with other users
-- 🔍 **Search** - Find users and content easily
-- 👤 **User Profiles** - Customizable user profiles with stats
-- 🔔 **Notifications** - Real-time notifications for interactions
-
-### Technical Features
-- 🚀 **High Performance** - Optimized for speed and scalability
-- 🔐 **Secure** - JWT authentication, RLS policies, encrypted data
-- 📊 **Real-time Updates** - WebSocket connections for live data
-- 💾 **Database Optimization** - Indexed queries and caching with Redis
-- 🐳 **Containerized** - Full Docker support for easy deployment
-- ☸️ **Kubernetes Ready** - Production-ready K8s manifests
-- 🔄 **CI/CD Pipeline** - Automated testing and deployment with Jenkins
-- 🌐 **CDN Integration** - CloudFront for fast media delivery
-- 📈 **Auto-scaling** - HPA for automatic resource management
-- 🔍 **Monitoring** - Health checks and logging
 
 ## 🛠 Tech Stack
 
@@ -120,18 +76,9 @@ A modern, full-stack social media application with Instagram-style vertical reel
             └────────────┘
 ```
 
-## 📦 Prerequisites
 
-- **Node.js** 18+ and npm
-- **Docker** 20+ and Docker Compose
-- **PostgreSQL** 14+ (for local development)
-- **Redis** 7+ (for local development)
-- **AWS CLI** (for production deployment)
-- **kubectl** (for Kubernetes management)
-- **Terraform** 1.0+ (for infrastructure provisioning)
-- **Git**
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Clone the Repository
 
@@ -207,7 +154,7 @@ Username: jane_smith
 Password: password123
 ```
 
-## 💻 Development
+## Development
 
 ### Available Commands
 
@@ -272,7 +219,7 @@ reelschat/
 └── README.md
 ```
 
-## 🚢 Deployment
+##  Deployment
 
 ### Production Deployment to AWS
 
@@ -350,7 +297,7 @@ make logs-frontend  # View frontend logs
 make metrics        # View resource usage
 ```
 
-## 📚 API Documentation
+## API Documentation
 
 ### Authentication
 
@@ -427,29 +374,6 @@ Content-Type: application/json
 }
 ```
 
-For complete API documentation, see [API_DOCS.md](./API_DOCS.md)
 
-## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- React and Node.js communities
-- PostgreSQL and Redis teams
-- AWS and Kubernetes projects
-- All contributors and testers
-
-## 📞 Support
-
-- **Email**: support@reelschat.com
-- **Documentation**: https://docs.reelschat.com
-- **Issues**: https://github.com/yourusername/reelschat/issues
