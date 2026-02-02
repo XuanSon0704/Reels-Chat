@@ -1,7 +1,7 @@
 
 
 
-## 🛠 Tech Stack
+## Tech Stack
 
 ### Backend
 - **Runtime**: Node.js 18+ with TypeScript
@@ -39,7 +39,7 @@
 - **Reverse Proxy**: Nginx with rate limiting
 - **Monitoring**: CloudWatch, Prometheus (optional)
 
-## 🏗 Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
